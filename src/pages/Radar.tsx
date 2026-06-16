@@ -108,29 +108,63 @@ export default function Radar() {
 
     try {
       // 1. Geocode the address using Nominatim
-      const geoRes = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`,
-        { headers: { 'Accept-Language': 'pt-BR' } }
-      );
-      const geoData = await geoRes.json();
+      let geoData: { lat: string; lon: string }[] = [];
+      try {
+        const geoRes = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=br`,
+          {
+            headers: {
+              'Accept-Language': 'pt-BR',
+              'User-Agent': 'CRM-App/1.0',
+            },
+          }
+        );
+        geoData = await geoRes.json();
+      } catch {
+        setError('Não foi possível acessar o serviço de geocodificação. Verifique sua conexão com a internet.');
+        return;
+      }
+
       if (!geoData.length) {
-        setError('Endereço não encontrado. Tente ser mais específico (ex: "Rua das Flores, 123, São Paulo, SP").');
+        setError('Endereço não encontrado. Tente incluir cidade e estado, ex: "Av. Dr. Nilo Peçanha, 2469, Porto Alegre, RS".');
         return;
       }
       const { lat, lon } = geoData[0];
 
-      // 2. Search nearby places via Overpass API
+      // 2. Search nearby places via Overpass API (try multiple endpoints)
       const query = buildOverpassQuery(parseFloat(lat), parseFloat(lon), radius, type);
-      const ovRes = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: query,
-      });
-      const ovData = await ovRes.json();
+      const OVERPASS_ENDPOINTS = [
+        'https://overpass-api.de/api/interpreter',
+        'https://lz4.overpass-api.de/api/interpreter',
+        'https://overpass.kumi.systems/api/interpreter',
+      ];
+
+      let ovData: { elements?: unknown[] } | null = null;
+      let lastErr = '';
+      for (const endpoint of OVERPASS_ENDPOINTS) {
+        try {
+          const ovRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `data=${encodeURIComponent(query)}`,
+          });
+          if (!ovRes.ok) { lastErr = `HTTP ${ovRes.status}`; continue; }
+          ovData = await ovRes.json();
+          break;
+        } catch (err) {
+          lastErr = (err as Error).message;
+        }
+      }
+
+      if (!ovData) {
+        setError(`Serviço de busca temporariamente indisponível (${lastErr}). Tente novamente em alguns instantes.`);
+        return;
+      }
 
       // 3. Map to Place objects, deduplicate by name+address
       const seen = new Set<string>();
       const results: Place[] = [];
-      for (const el of ovData.elements ?? []) {
+      for (const el of (ovData.elements ?? []) as Array<{ id: number; lat: number; lon: number; tags?: Record<string, string> }>) {
         const name = el.tags?.name;
         if (!name) continue;
         const addr = buildAddress(el.tags ?? {});
@@ -151,8 +185,8 @@ export default function Radar() {
       results.sort((a, b) => a.name.localeCompare(b.name));
       setPlaces(results);
       setSearched(true);
-    } catch {
-      setError('Erro ao buscar comércios. Verifique sua conexão e tente novamente.');
+    } catch (err) {
+      setError('Erro inesperado: ' + (err as Error).message);
     } finally {
       setLoading(false);
     }
