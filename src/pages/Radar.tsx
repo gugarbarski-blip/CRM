@@ -41,20 +41,23 @@ const RADIUS_OPTIONS = [
 
 // Build Overpass query based on business type filter
 function buildOverpassQuery(lat: number, lon: number, radius: number, type: string): string {
+  const A = `around:${radius},${lat},${lon}`;
   let filter = '';
   if (type === '') {
-    // Any named shop or amenity
+    // Any named shop, plus a curated list of business-like amenities.
+    // (Avoids heavy/irrelevant amenities like benches, parking, waste bins.)
     filter = `
-      node["shop"]["name"](around:${radius},${lat},${lon});
-      node["amenity"]["name"](around:${radius},${lat},${lon});
-      node["tourism"]["name"](around:${radius},${lat},${lon});
+      node["shop"]["name"](${A});
+      node["amenity"~"^(restaurant|cafe|bar|fast_food|pub|pharmacy|clinic|dentist|veterinary|bank|fuel|marketplace|hairdresser|beauty)$"]["name"](${A});
+      node["tourism"~"^(hotel|guest_house|hostel)$"]["name"](${A});
+      node["leisure"="fitness_centre"]["name"](${A});
     `;
   } else if (['restaurant','cafe','bar','pharmacy','clinic','school','hotel'].includes(type)) {
-    filter = `node["amenity"="${type}"]["name"](around:${radius},${lat},${lon});`;
+    filter = `node["amenity"="${type}"]["name"](${A});`;
   } else if (type === 'gym') {
-    filter = `node["leisure"="fitness_centre"]["name"](around:${radius},${lat},${lon});`;
+    filter = `node["leisure"="fitness_centre"]["name"](${A});`;
   } else {
-    filter = `node["shop"="${type}"]["name"](around:${radius},${lat},${lon});`;
+    filter = `node["shop"="${type}"]["name"](${A});`;
   }
   return `[out:json][timeout:25];(${filter});out body;`;
 }
@@ -133,31 +136,36 @@ export default function Radar() {
 
       // 2. Search nearby places via Overpass API (try multiple endpoints)
       const query = buildOverpassQuery(parseFloat(lat), parseFloat(lon), radius, type);
+      // Try multiple Overpass mirrors; the main instance is often overloaded (504).
       const OVERPASS_ENDPOINTS = [
-        'https://overpass-api.de/api/interpreter',
-        'https://lz4.overpass-api.de/api/interpreter',
         'https://overpass.kumi.systems/api/interpreter',
+        'https://lz4.overpass-api.de/api/interpreter',
+        'https://overpass-api.de/api/interpreter',
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
       ];
 
       let ovData: { elements?: unknown[] } | null = null;
       let lastErr = '';
-      for (const endpoint of OVERPASS_ENDPOINTS) {
-        try {
-          const ovRes = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `data=${encodeURIComponent(query)}`,
-          });
-          if (!ovRes.ok) { lastErr = `HTTP ${ovRes.status}`; continue; }
-          ovData = await ovRes.json();
-          break;
-        } catch (err) {
-          lastErr = (err as Error).message;
+      // Two passes over the mirrors before giving up.
+      for (let pass = 0; pass < 2 && !ovData; pass++) {
+        for (const endpoint of OVERPASS_ENDPOINTS) {
+          try {
+            const ovRes = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `data=${encodeURIComponent(query)}`,
+            });
+            if (!ovRes.ok) { lastErr = `HTTP ${ovRes.status}`; continue; }
+            ovData = await ovRes.json();
+            break;
+          } catch (err) {
+            lastErr = (err as Error).message;
+          }
         }
       }
 
       if (!ovData) {
-        setError(`Serviço de busca temporariamente indisponível (${lastErr}). Tente novamente em alguns instantes.`);
+        setError(`Serviço de busca (OpenStreetMap) sobrecarregado no momento (${lastErr}). Aguarde alguns segundos e tente de novo — não é necessária nenhuma chave de API.`);
         return;
       }
 
