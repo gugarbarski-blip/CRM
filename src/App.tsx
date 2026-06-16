@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Tasks from './pages/Tasks';
+import Radar from './pages/Radar';
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="clientes" element={<Clients />} />
           <Route path="clientes/:id" element={<ClientDetail />} />
           <Route path="tarefas" element={<Tasks />} />
+          <Route path="radar" element={<Radar />} />
         </Route>
       </Routes>
     </BrowserRouter>

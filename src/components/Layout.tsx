@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Users, CheckSquare, LayoutDashboard } from 'lucide-react';
+import { Users, CheckSquare, LayoutDashboard, Radar } from 'lucide-react';
 
 export default function Layout() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -22,6 +22,9 @@ export default function Layout() {
         </NavLink>
         <NavLink to="/tarefas" className={navClass}>
           <CheckSquare size={16} /> Tarefas
+        </NavLink>
+        <NavLink to="/radar" className={navClass}>
+          <Radar size={16} /> Radar
         </NavLink>
       </aside>
       <main className="flex-1 p-6 overflow-auto">
