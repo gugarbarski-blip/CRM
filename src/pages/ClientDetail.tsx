@@ -30,41 +30,56 @@ export default function ClientDetail() {
   const [intDesc, setIntDesc] = useState('');
   const [intDate, setIntDate] = useState(new Date().toISOString().slice(0, 10));
 
-  const load = useCallback(() => {
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
     if (!id) return;
-    setClient(clientStore.getById(id) || null);
-    setTasks(taskStore.getByClient(id));
-    setInteractions(interactionStore.getByClient(id));
+    setLoading(true);
+    try {
+      const [c, t, i] = await Promise.all([
+        clientStore.getById(id),
+        taskStore.getByClient(id),
+        interactionStore.getByClient(id),
+      ]);
+      setClient(c);
+      setTasks(t);
+      setInteractions(i);
+    } catch (err) {
+      alert('Erro ao carregar dados: ' + (err as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
 
-  const addTask = (e: React.FormEvent) => {
+  const addTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!taskTitle.trim() || !id) return;
-    taskStore.create({ client_id: id, title: taskTitle, description: taskDesc, due_date: taskDue, completed: false });
+    await taskStore.create({ client_id: id, title: taskTitle, description: taskDesc, due_date: taskDue, completed: false });
     setTaskTitle(''); setTaskDue(''); setTaskDesc('');
     load();
   };
 
-  const toggleTask = (taskId: string, completed: boolean) => {
-    taskStore.update(taskId, { completed: !completed });
+  const toggleTask = async (taskId: string, completed: boolean) => {
+    await taskStore.update(taskId, { completed: !completed });
     load();
   };
 
-  const deleteTask = (taskId: string) => {
-    taskStore.delete(taskId);
+  const deleteTask = async (taskId: string) => {
+    await taskStore.delete(taskId);
     load();
   };
 
-  const addInteraction = (e: React.FormEvent) => {
+  const addInteraction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!intDesc.trim() || !id) return;
-    interactionStore.create({ client_id: id, type: intType, description: intDesc, date: intDate });
+    await interactionStore.create({ client_id: id, type: intType, description: intDesc, date: intDate });
     setIntDesc('');
     load();
   };
 
+  if (loading) return <div className="text-gray-400">Carregando...</div>;
   if (!client) return <div className="text-gray-400">Cliente não encontrado.</div>;
 
   const statusColor: Record<Client['status'], string> = {
@@ -185,7 +200,7 @@ export default function ClientDetail() {
                     <div className="flex-1">
                       <div className="flex justify-between items-start">
                         <span className="text-xs font-medium text-gray-500">{t?.label} · {format(new Date(i.date), 'dd/MM/yyyy', { locale: ptBR })}</span>
-                        <button onClick={() => { interactionStore.delete(i.id); load(); }} className="text-gray-300 hover:text-red-500">
+                        <button onClick={async () => { await interactionStore.delete(i.id); load(); }} className="text-gray-300 hover:text-red-500">
                           <Trash2 size={13} />
                         </button>
                       </div>

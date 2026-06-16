@@ -20,7 +20,18 @@ export default function Clients() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
 
-  const load = () => setClients(clientStore.getAll());
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setClients(await clientStore.getAll());
+    } catch (err) {
+      alert('Erro ao carregar clientes: ' + (err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => { load(); }, []);
 
@@ -30,8 +41,15 @@ export default function Clients() {
     c.company.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleDelete = (id: string) => {
-    if (confirm('Excluir este cliente?')) { clientStore.delete(id); load(); }
+  const handleDelete = async (id: string) => {
+    if (confirm('Excluir este cliente?')) {
+      try {
+        await clientStore.delete(id);
+        load();
+      } catch (err) {
+        alert('Erro ao excluir: ' + (err as Error).message);
+      }
+    }
   };
 
   const handleSave = () => { load(); setModalOpen(false); setEditing(null); };
@@ -59,7 +77,9 @@ export default function Clients() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-16 text-gray-400">Carregando...</div>
+        ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <p className="mb-1">Nenhum cliente encontrado</p>
             <p className="text-sm">Clique em "Novo Cliente" para começar</p>

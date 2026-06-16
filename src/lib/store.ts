@@ -1,87 +1,95 @@
+import { supabase } from './supabase';
 import type { Client, Task, Interaction } from '../types';
 
-const STORAGE_KEYS = {
-  clients: 'crm_clients',
-  tasks: 'crm_tasks',
-  interactions: 'crm_interactions',
-};
-
-function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2);
-}
-
-function load<T>(key: string): T[] {
-  try {
-    return JSON.parse(localStorage.getItem(key) || '[]');
-  } catch {
-    return [];
-  }
-}
-
-function save<T>(key: string, data: T[]) {
-  localStorage.setItem(key, JSON.stringify(data));
+// Convert empty strings to null for nullable date columns
+function nullifyDate(value: string | null | undefined): string | null {
+  return value && value.trim() ? value : null;
 }
 
 // Clients
 export const clientStore = {
-  getAll: (): Client[] => load<Client>(STORAGE_KEYS.clients),
-  getById: (id: string): Client | undefined => load<Client>(STORAGE_KEYS.clients).find(c => c.id === id),
-  create: (data: Omit<Client, 'id' | 'created_at'>): Client => {
-    const clients = load<Client>(STORAGE_KEYS.clients);
-    const client: Client = { ...data, id: generateId(), created_at: new Date().toISOString() };
-    save(STORAGE_KEYS.clients, [...clients, client]);
-    return client;
+  getAll: async (): Promise<Client[]> => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
   },
-  update: (id: string, data: Partial<Client>): Client | null => {
-    const clients = load<Client>(STORAGE_KEYS.clients);
-    const idx = clients.findIndex(c => c.id === id);
-    if (idx === -1) return null;
-    clients[idx] = { ...clients[idx], ...data };
-    save(STORAGE_KEYS.clients, clients);
-    return clients[idx];
+  getById: async (id: string): Promise<Client | null> => {
+    const { data, error } = await supabase.from('clients').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return data;
   },
-  delete: (id: string) => {
-    save(STORAGE_KEYS.clients, load<Client>(STORAGE_KEYS.clients).filter(c => c.id !== id));
+  create: async (data: Omit<Client, 'id' | 'created_at'>): Promise<Client> => {
+    const { data: created, error } = await supabase.from('clients').insert(data).select().single();
+    if (error) throw error;
+    return created;
+  },
+  update: async (id: string, data: Partial<Client>): Promise<Client | null> => {
+    const { data: updated, error } = await supabase.from('clients').update(data).eq('id', id).select().single();
+    if (error) throw error;
+    return updated;
+  },
+  delete: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('clients').delete().eq('id', id);
+    if (error) throw error;
   },
 };
 
 // Tasks
 export const taskStore = {
-  getAll: (): Task[] => load<Task>(STORAGE_KEYS.tasks),
-  getByClient: (clientId: string): Task[] => load<Task>(STORAGE_KEYS.tasks).filter(t => t.client_id === clientId),
-  create: (data: Omit<Task, 'id' | 'created_at'>): Task => {
-    const tasks = load<Task>(STORAGE_KEYS.tasks);
-    const task: Task = { ...data, id: generateId(), created_at: new Date().toISOString() };
-    save(STORAGE_KEYS.tasks, [...tasks, task]);
-    return task;
+  getAll: async (): Promise<Task[]> => {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
   },
-  update: (id: string, data: Partial<Task>): Task | null => {
-    const tasks = load<Task>(STORAGE_KEYS.tasks);
-    const idx = tasks.findIndex(t => t.id === id);
-    if (idx === -1) return null;
-    tasks[idx] = { ...tasks[idx], ...data };
-    save(STORAGE_KEYS.tasks, tasks);
-    return tasks[idx];
+  getByClient: async (clientId: string): Promise<Task[]> => {
+    const { data, error } = await supabase.from('tasks').select('*').eq('client_id', clientId).order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
   },
-  delete: (id: string) => {
-    save(STORAGE_KEYS.tasks, load<Task>(STORAGE_KEYS.tasks).filter(t => t.id !== id));
+  create: async (data: Omit<Task, 'id' | 'created_at'>): Promise<Task> => {
+    const payload = { ...data, due_date: nullifyDate(data.due_date) };
+    const { data: created, error } = await supabase.from('tasks').insert(payload).select().single();
+    if (error) throw error;
+    return created;
+  },
+  update: async (id: string, data: Partial<Task>): Promise<Task | null> => {
+    const payload = 'due_date' in data ? { ...data, due_date: nullifyDate(data.due_date) } : data;
+    const { data: updated, error } = await supabase.from('tasks').update(payload).eq('id', id).select().single();
+    if (error) throw error;
+    return updated;
+  },
+  delete: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) throw error;
   },
 };
 
 // Interactions
 export const interactionStore = {
-  getAll: (): Interaction[] => load<Interaction>(STORAGE_KEYS.interactions),
-  getByClient: (clientId: string): Interaction[] =>
-    load<Interaction>(STORAGE_KEYS.interactions)
-      .filter(i => i.client_id === clientId)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-  create: (data: Omit<Interaction, 'id' | 'created_at'>): Interaction => {
-    const interactions = load<Interaction>(STORAGE_KEYS.interactions);
-    const interaction: Interaction = { ...data, id: generateId(), created_at: new Date().toISOString() };
-    save(STORAGE_KEYS.interactions, [...interactions, interaction]);
-    return interaction;
+  getAll: async (): Promise<Interaction[]> => {
+    const { data, error } = await supabase.from('interactions').select('*').order('date', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
   },
-  delete: (id: string) => {
-    save(STORAGE_KEYS.interactions, load<Interaction>(STORAGE_KEYS.interactions).filter(i => i.id !== id));
+  getByClient: async (clientId: string): Promise<Interaction[]> => {
+    const { data, error } = await supabase
+      .from('interactions')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('date', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  },
+  create: async (data: Omit<Interaction, 'id' | 'created_at'>): Promise<Interaction> => {
+    const { data: created, error } = await supabase.from('interactions').insert(data).select().single();
+    if (error) throw error;
+    return created;
+  },
+  delete: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('interactions').delete().eq('id', id);
+    if (error) throw error;
   },
 };

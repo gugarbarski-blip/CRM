@@ -1,24 +1,46 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, CheckSquare, Clock, TrendingUp } from 'lucide-react';
+import { Users, CheckSquare, Clock, TrendingUp, Plus } from 'lucide-react';
 import { clientStore, taskStore, interactionStore } from '../lib/store';
+import type { Client, Task, Interaction } from '../types';
+import ClientModal from '../components/ClientModal';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 export default function Dashboard() {
-  const clients = clientStore.getAll();
-  const tasks = taskStore.getAll();
-  const interactions = interactionStore.getAll();
+  const [clients, setClients] = useState<Client[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [interactions, setInteractions] = useState<Interaction[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const load = async () => {
+    try {
+      const [c, t, i] = await Promise.all([
+        clientStore.getAll(),
+        taskStore.getAll(),
+        interactionStore.getAll(),
+      ]);
+      setClients(c);
+      setTasks(t);
+      setInteractions(i);
+    } catch (err) {
+      alert('Erro ao carregar o dashboard: ' + (err as Error).message);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const clientMap = useMemo(() => Object.fromEntries(clients.map(c => [c.id, c])), [clients]);
 
   const stats = useMemo(() => ({
     totalClients: clients.length,
     activeClients: clients.filter(c => c.status === 'active').length,
     pendingTasks: tasks.filter(t => !t.completed).length,
-    overdueTasks: tasks.filter(t => !t.completed && new Date(t.due_date) < new Date()).length,
+    overdueTasks: tasks.filter(t => !t.completed && t.due_date && new Date(t.due_date) < new Date()).length,
   }), [clients, tasks]);
 
   const recentInteractions = useMemo(() =>
-    interactions
+    [...interactions]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5)
   , [interactions]);
@@ -26,7 +48,11 @@ export default function Dashboard() {
   const upcomingTasks = useMemo(() =>
     tasks
       .filter(t => !t.completed)
-      .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
+      .sort((a, b) => {
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+      })
       .slice(0, 5)
   , [tasks]);
 
@@ -36,7 +62,15 @@ export default function Dashboard() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">Dashboard</h2>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
+        <button
+          onClick={() => setModalOpen(true)}
+          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+        >
+          <Plus size={16} /> Novo Cliente
+        </button>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard icon={<Users size={20} />} label="Total de Clientes" value={stats.totalClients} color="blue" />
@@ -54,14 +88,14 @@ export default function Dashboard() {
           {upcomingTasks.length === 0 && <p className="text-gray-400 text-sm">Nenhuma tarefa pendente</p>}
           <div className="space-y-3">
             {upcomingTasks.map(task => {
-              const client = clientStore.getById(task.client_id);
-              const overdue = new Date(task.due_date) < new Date();
+              const client = clientMap[task.client_id];
+              const overdue = !!task.due_date && new Date(task.due_date) < new Date();
               return (
                 <div key={task.id} className="flex items-start gap-3">
                   <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${overdue ? 'bg-red-500' : 'bg-blue-400'}`} />
                   <div>
                     <p className="text-sm font-medium text-gray-800">{task.title}</p>
-                    <p className="text-xs text-gray-500">{client?.name} · {format(new Date(task.due_date), 'dd/MM/yyyy', { locale: ptBR })}</p>
+                    <p className="text-xs text-gray-500">{client?.name}{task.due_date && ` · ${format(new Date(task.due_date), 'dd/MM/yyyy', { locale: ptBR })}`}</p>
                   </div>
                 </div>
               );
@@ -77,7 +111,7 @@ export default function Dashboard() {
           {recentInteractions.length === 0 && <p className="text-gray-400 text-sm">Nenhuma interação registrada</p>}
           <div className="space-y-3">
             {recentInteractions.map(interaction => {
-              const client = clientStore.getById(interaction.client_id);
+              const client = clientMap[interaction.client_id];
               return (
                 <div key={interaction.id} className="flex items-start gap-3">
                   <span className="text-base">{typeLabel[interaction.type]?.split(' ')[0]}</span>
@@ -92,6 +126,14 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {modalOpen && (
+        <ClientModal
+          client={null}
+          onSave={() => { setModalOpen(false); load(); }}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

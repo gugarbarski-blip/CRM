@@ -13,9 +13,14 @@ export default function Tasks() {
   const [clients, setClients] = useState<Client[]>([]);
   const [filter, setFilter] = useState<Filter>('pending');
 
-  const load = () => {
-    setTasks(taskStore.getAll());
-    setClients(clientStore.getAll());
+  const load = async () => {
+    try {
+      const [t, c] = await Promise.all([taskStore.getAll(), clientStore.getAll()]);
+      setTasks(t);
+      setClients(c);
+    } catch (err) {
+      alert('Erro ao carregar tarefas: ' + (err as Error).message);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -33,8 +38,8 @@ export default function Tasks() {
     return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
   });
 
-  const toggle = (id: string, completed: boolean) => { taskStore.update(id, { completed: !completed }); load(); };
-  const remove = (id: string) => { if (confirm('Excluir tarefa?')) { taskStore.delete(id); load(); } };
+  const toggle = async (id: string, completed: boolean) => { await taskStore.update(id, { completed: !completed }); load(); };
+  const remove = async (id: string) => { if (confirm('Excluir tarefa?')) { await taskStore.delete(id); load(); } };
 
   const clientMap = Object.fromEntries(clients.map(c => [c.id, c]));
 

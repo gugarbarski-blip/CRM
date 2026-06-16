@@ -22,15 +22,24 @@ export default function ClientModal({ client, onSave, onClose }: Props) {
     }
   }, [client]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name.trim()) return;
-    if (client) {
-      clientStore.update(client.id, form);
-    } else {
-      clientStore.create(form);
+    if (!form.name.trim() || saving) return;
+    setSaving(true);
+    try {
+      if (client) {
+        await clientStore.update(client.id, form);
+      } else {
+        await clientStore.create(form);
+      }
+      onSave();
+    } catch (err) {
+      alert('Erro ao salvar cliente: ' + (err as Error).message);
+    } finally {
+      setSaving(false);
     }
-    onSave();
   };
 
   return (
@@ -70,8 +79,8 @@ export default function ClientModal({ client, onSave, onClose }: Props) {
             <button type="button" onClick={onClose} className="flex-1 border border-gray-200 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50">
               Cancelar
             </button>
-            <button type="submit" className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-700">
-              Salvar
+            <button type="submit" disabled={saving} className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-60">
+              {saving ? 'Salvando...' : 'Salvar'}
             </button>
           </div>
         </form>

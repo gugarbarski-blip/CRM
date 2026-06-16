@@ -14,7 +14,7 @@ export interface Task {
   client_id: string;
   title: string;
   description: string;
-  due_date: string;
+  due_date: string | null;
   completed: boolean;
   created_at: string;
 }
