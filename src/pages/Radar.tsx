@@ -39,28 +39,6 @@ const RADIUS_OPTIONS = [
   { label: '10 km', value: 10000 },
 ];
 
-// Build Overpass query based on business type filter
-function buildOverpassQuery(lat: number, lon: number, radius: number, type: string): string {
-  const A = `around:${radius},${lat},${lon}`;
-  let filter = '';
-  if (type === '') {
-    // Any named shop, plus a curated list of business-like amenities.
-    // (Avoids heavy/irrelevant amenities like benches, parking, waste bins.)
-    filter = `
-      node["shop"]["name"](${A});
-      node["amenity"~"^(restaurant|cafe|bar|fast_food|pub|pharmacy|clinic|dentist|veterinary|bank|fuel|marketplace|hairdresser|beauty)$"]["name"](${A});
-      node["tourism"~"^(hotel|guest_house|hostel)$"]["name"](${A});
-      node["leisure"="fitness_centre"]["name"](${A});
-    `;
-  } else if (['restaurant','cafe','bar','pharmacy','clinic','school','hotel'].includes(type)) {
-    filter = `node["amenity"="${type}"]["name"](${A});`;
-  } else if (type === 'gym') {
-    filter = `node["leisure"="fitness_centre"]["name"](${A});`;
-  } else {
-    filter = `node["shop"="${type}"]["name"](${A});`;
-  }
-  return `[out:json][timeout:25];(${filter});out body;`;
-}
 
 function parseTag(tags: Record<string, string>, ...keys: string[]): string | undefined {
   for (const key of keys) {
@@ -110,62 +88,24 @@ export default function Radar() {
     setSearched(false);
 
     try {
-      // 1. Geocode the address using Nominatim
-      let geoData: { lat: string; lon: string }[] = [];
-      try {
-        const geoRes = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=br`,
-          {
-            headers: {
-              'Accept-Language': 'pt-BR',
-              'User-Agent': 'CRM-App/1.0',
-            },
-          }
-        );
-        geoData = await geoRes.json();
-      } catch {
-        setError('Não foi possível acessar o serviço de geocodificação. Verifique sua conexão com a internet.');
-        return;
-      }
+      // 1. Geocode via our own Vercel serverless function (avoids browser rate limits)
+      const geoRes = await fetch(`/api/geocode?q=${encodeURIComponent(address)}`);
+      const geoData = await geoRes.json();
 
-      if (!geoData.length) {
-        setError('Endereço não encontrado. Tente incluir cidade e estado, ex: "Av. Dr. Nilo Peçanha, 2469, Porto Alegre, RS".');
+      if (!geoRes.ok || !Array.isArray(geoData) || geoData.length === 0) {
+        setError('Endereço não encontrado. Inclua cidade e estado, ex: "Av. Dr. Nilo Peçanha, 2469, Porto Alegre, RS".');
         return;
       }
       const { lat, lon } = geoData[0];
 
-      // 2. Search nearby places via Overpass API (try multiple endpoints)
-      const query = buildOverpassQuery(parseFloat(lat), parseFloat(lon), radius, type);
-      // Try multiple Overpass mirrors; the main instance is often overloaded (504).
-      const OVERPASS_ENDPOINTS = [
-        'https://overpass.kumi.systems/api/interpreter',
-        'https://lz4.overpass-api.de/api/interpreter',
-        'https://overpass-api.de/api/interpreter',
-        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-      ];
+      // 2. Search via our own Vercel serverless function (server-to-server, sem timeout de browser)
+      const radarRes = await fetch(
+        `/api/radar?lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`
+      );
+      const ovData = await radarRes.json();
 
-      let ovData: { elements?: unknown[] } | null = null;
-      let lastErr = '';
-      // Two passes over the mirrors before giving up.
-      for (let pass = 0; pass < 2 && !ovData; pass++) {
-        for (const endpoint of OVERPASS_ENDPOINTS) {
-          try {
-            const ovRes = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: `data=${encodeURIComponent(query)}`,
-            });
-            if (!ovRes.ok) { lastErr = `HTTP ${ovRes.status}`; continue; }
-            ovData = await ovRes.json();
-            break;
-          } catch (err) {
-            lastErr = (err as Error).message;
-          }
-        }
-      }
-
-      if (!ovData) {
-        setError(`Serviço de busca (OpenStreetMap) sobrecarregado no momento (${lastErr}). Aguarde alguns segundos e tente de novo — não é necessária nenhuma chave de API.`);
+      if (!radarRes.ok) {
+        setError(`Erro ao buscar comércios: ${ovData.error ?? radarRes.status}. Tente novamente.`);
         return;
       }
 
