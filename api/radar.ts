@@ -52,9 +52,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const ovRes = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(20000),
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8',
+          'Accept': 'application/json',
+          // Overpass anti-abuse rejects requests without a valid User-Agent.
+          'User-Agent': 'CRM-Gustavo/1.0 (gugarbarski@gmail.com)',
+        },
+        body: query,
+        signal: AbortSignal.timeout(25000),
       });
       if (!ovRes.ok) {
         lastErr = `HTTP ${ovRes.status} from ${endpoint}`;
