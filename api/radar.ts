@@ -19,22 +19,25 @@ function buildQuery(lat: number, lon: number, radius: number, type: string): str
   const A = `around:${radius},${lat},${lon}`;
   let filter = '';
 
+  // nwr = node + way + relation, so we also catch businesses mapped as
+  // building footprints / areas (much higher coverage than nodes only).
   if (type === '') {
     filter = `
-      node["shop"]["name"](${A});
-      node["amenity"~"^(restaurant|cafe|bar|fast_food|pub|pharmacy|clinic|dentist|bank|fuel|hairdresser|beauty)$"]["name"](${A});
-      node["tourism"~"^(hotel|guest_house|hostel)$"]["name"](${A});
-      node["leisure"="fitness_centre"]["name"](${A});
+      nwr["shop"]["name"](${A});
+      nwr["amenity"~"^(restaurant|cafe|bar|fast_food|pub|pharmacy|clinic|dentist|bank|fuel|hairdresser|beauty)$"]["name"](${A});
+      nwr["tourism"~"^(hotel|guest_house|hostel)$"]["name"](${A});
+      nwr["leisure"="fitness_centre"]["name"](${A});
     `;
   } else if (['restaurant', 'cafe', 'bar', 'pharmacy', 'clinic', 'school', 'hotel'].includes(type)) {
-    filter = `node["amenity"="${type}"]["name"](${A});`;
+    filter = `nwr["amenity"="${type}"]["name"](${A});`;
   } else if (type === 'gym') {
-    filter = `node["leisure"="fitness_centre"]["name"](${A});`;
+    filter = `nwr["leisure"="fitness_centre"]["name"](${A});`;
   } else {
-    filter = `node["shop"="${type}"]["name"](${A});`;
+    filter = `nwr["shop"="${type}"]["name"](${A});`;
   }
 
-  return `[out:json][timeout:20];(${filter});out body;`;
+  // out center => returns a lat/lon center even for ways/relations
+  return `[out:json][timeout:20];(${filter});out center;`;
 }
 
 async function tryEndpointGet(endpoint: string, query: string, timeoutMs: number): Promise<Response> {

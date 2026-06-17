@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MapPin, Search, UserPlus, Building2, Phone, Globe, Check, Loader2 } from 'lucide-react';
+import { MapPin, Search, UserPlus, Building2, Phone, Globe, Check, Loader2, Clock, Mail, AtSign, Share2, Accessibility } from 'lucide-react';
 import { clientStore } from '../lib/store';
 
 interface Place {
@@ -8,6 +8,13 @@ interface Place {
   address: string;
   phone?: string;
   website?: string;
+  email?: string;
+  instagram?: string;
+  facebook?: string;
+  hours?: string;
+  brand?: string;
+  cuisine?: string;
+  wheelchair?: string;
   category?: string;
   lat: number;
   lon: number;
@@ -44,6 +51,14 @@ function parseTag(tags: Record<string, string>, ...keys: string[]): string | und
   for (const key of keys) {
     if (tags[key]) return tags[key];
   }
+}
+
+// Normalize a social handle/url into a clickable profile URL
+function socialUrl(raw: string | undefined, base: string): string | undefined {
+  if (!raw) return undefined;
+  if (raw.startsWith('http')) return raw;
+  const handle = raw.replace(/^@/, '').replace(/\/$/, '');
+  return `${base}/${handle}`;
 }
 
 function buildAddress(tags: Record<string, string>): string {
@@ -112,10 +127,22 @@ export default function Radar() {
       // 3. Map to Place objects, deduplicate by name+address
       const seen = new Set<string>();
       const results: Place[] = [];
-      for (const el of (ovData.elements ?? []) as Array<{ id: number; lat: number; lon: number; tags?: Record<string, string> }>) {
-        const name = el.tags?.name;
+      type OverpassEl = {
+        id: number;
+        lat?: number;
+        lon?: number;
+        center?: { lat: number; lon: number };
+        tags?: Record<string, string>;
+      };
+      for (const el of (ovData.elements ?? []) as OverpassEl[]) {
+        const tags = el.tags ?? {};
+        const name = tags.name;
         if (!name) continue;
-        const addr = buildAddress(el.tags ?? {});
+        // ways/relations carry coords in `center`, nodes in lat/lon directly
+        const elat = el.lat ?? el.center?.lat;
+        const elon = el.lon ?? el.center?.lon;
+        if (elat == null || elon == null) continue;
+        const addr = buildAddress(tags);
         const key = `${name.toLowerCase()}|${addr}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -123,16 +150,39 @@ export default function Radar() {
           id: String(el.id),
           name,
           address: addr,
-          phone: parseTag(el.tags ?? {}, 'phone', 'contact:phone'),
-          website: parseTag(el.tags ?? {}, 'website', 'contact:website', 'url'),
-          category: categoryLabel(el.tags ?? {}),
-          lat: el.lat,
-          lon: el.lon,
+          phone: parseTag(tags, 'phone', 'contact:phone', 'contact:mobile'),
+          website: parseTag(tags, 'website', 'contact:website', 'url'),
+          email: parseTag(tags, 'email', 'contact:email'),
+          instagram: socialUrl(parseTag(tags, 'contact:instagram', 'instagram'), 'https://instagram.com'),
+          facebook: socialUrl(parseTag(tags, 'contact:facebook', 'facebook'), 'https://facebook.com'),
+          hours: parseTag(tags, 'opening_hours'),
+          brand: parseTag(tags, 'brand', 'operator'),
+          cuisine: parseTag(tags, 'cuisine'),
+          wheelchair: parseTag(tags, 'wheelchair'),
+          category: categoryLabel(tags),
+          lat: elat,
+          lon: elon,
         });
       }
       results.sort((a, b) => a.name.localeCompare(b.name));
       setPlaces(results);
       setSearched(true);
+
+      // 4. Fill in missing addresses via reverse geocoding (throttled to
+      //    respect Nominatim's ~1 req/s; only for the ones lacking addr tags).
+      const missing = results.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
+      for (const p of missing) {
+        try {
+          const r = await fetch(`/api/reverse?lat=${p.lat}&lon=${p.lon}`);
+          if (r.ok) {
+            const { address: addr } = await r.json();
+            if (addr) {
+              setPlaces(prev => prev.map(x => x.id === p.id ? { ...x, address: addr } : x));
+            }
+          }
+        } catch { /* ignore individual failures */ }
+        await new Promise(res => setTimeout(res, 1100));
+      }
     } catch (err) {
       setError('Erro inesperado: ' + (err as Error).message);
     } finally {
@@ -143,13 +193,25 @@ export default function Radar() {
   const importAsClient = async (place: Place) => {
     setImporting(prev => new Set(prev).add(place.id));
     try {
+      const notesLines = [
+        'Importado do Radar',
+        `Categoria: ${place.category}`,
+        `Endereço: ${place.address}`,
+        place.brand && `Marca/Rede: ${place.brand}`,
+        place.cuisine && `Cozinha: ${place.cuisine}`,
+        place.hours && `Horário: ${place.hours}`,
+        place.website && `Site: ${place.website}`,
+        place.instagram && `Instagram: ${place.instagram}`,
+        place.facebook && `Facebook: ${place.facebook}`,
+        `Mapa: https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lon}`,
+      ].filter(Boolean);
       await clientStore.create({
         name: place.name,
-        email: '',
+        email: place.email ?? '',
         phone: place.phone ?? '',
-        company: place.name,
+        company: place.brand ?? place.name,
         status: 'lead',
-        notes: `Importado do Radar\nCategoria: ${place.category}\nEndereço: ${place.address}${place.website ? `\nSite: ${place.website}` : ''}`,
+        notes: notesLines.join('\n'),
       });
       setPlaces(prev => prev.map(p => p.id === place.id ? { ...p, imported: true } : p));
     } catch (err) {
@@ -232,9 +294,17 @@ export default function Radar() {
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-900 text-sm leading-snug">{place.name}</p>
-                  {place.category && (
-                    <span className="inline-block mt-0.5 text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{place.category}</span>
-                  )}
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {place.category && (
+                      <span className="inline-block text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{place.category}</span>
+                    )}
+                    {place.cuisine && (
+                      <span className="inline-block text-xs bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full">{place.cuisine}</span>
+                    )}
+                    {place.brand && (
+                      <span className="inline-block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{place.brand}</span>
+                    )}
+                  </div>
                 </div>
                 <button
                   onClick={() => !place.imported && importAsClient(place)}
@@ -264,11 +334,41 @@ export default function Radar() {
                     <Phone size={12} className="flex-shrink-0" />{place.phone}
                   </p>
                 )}
+                {place.email && (
+                  <p className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <Mail size={12} className="flex-shrink-0" />
+                    <a href={`mailto:${place.email}`} className="hover:underline truncate">{place.email}</a>
+                  </p>
+                )}
+                {place.hours && (
+                  <p className="flex items-start gap-1.5 text-xs text-gray-500">
+                    <Clock size={12} className="mt-0.5 flex-shrink-0" /><span className="truncate">{place.hours}</span>
+                  </p>
+                )}
                 {place.website && (
                   <p className="flex items-center gap-1.5 text-xs text-blue-500">
                     <Globe size={12} className="flex-shrink-0" />
                     <a href={place.website} target="_blank" rel="noopener noreferrer" className="hover:underline truncate">{place.website.replace(/^https?:\/\//, '')}</a>
                   </p>
+                )}
+                {(place.instagram || place.facebook || place.wheelchair === 'yes') && (
+                  <div className="flex items-center gap-3 pt-0.5">
+                    {place.instagram && (
+                      <a href={place.instagram} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-pink-500 hover:text-pink-600" title="Instagram">
+                        <AtSign size={14} /><span className="text-xs">Instagram</span>
+                      </a>
+                    )}
+                    {place.facebook && (
+                      <a href={place.facebook} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-blue-600 hover:text-blue-700" title="Facebook">
+                        <Share2 size={14} /><span className="text-xs">Facebook</span>
+                      </a>
+                    )}
+                    {place.wheelchair === 'yes' && (
+                      <span className="text-green-600" title="Acessível para cadeirantes">
+                        <Accessibility size={14} />
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
 
