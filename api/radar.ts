@@ -19,16 +19,20 @@ function buildQuery(lat: number, lon: number, radius: number, type: string): str
   const A = `around:${radius},${lat},${lon}`;
   let filter = '';
 
-  // nwr = node + way + relation, so we also catch businesses mapped as
-  // building footprints / areas (much higher coverage than nodes only).
+  // nwr = node + way + relation, catches businesses mapped as areas too.
   if (type === '') {
+    // Broad "all" sweep: any named entity that is a shop, amenity, office,
+    // tourism spot, leisure facility, or craft. This catches language schools
+    // (amenity=language_school), offices, clinics, etc. that the old enum missed.
     filter = `
       nwr["shop"]["name"](${A});
-      nwr["amenity"~"^(restaurant|cafe|bar|fast_food|pub|pharmacy|clinic|dentist|bank|fuel|hairdresser|beauty)$"]["name"](${A});
-      nwr["tourism"~"^(hotel|guest_house|hostel)$"]["name"](${A});
-      nwr["leisure"="fitness_centre"]["name"](${A});
+      nwr["amenity"]["name"](${A});
+      nwr["tourism"]["name"](${A});
+      nwr["leisure"]["name"](${A});
+      nwr["office"]["name"](${A});
+      nwr["craft"]["name"](${A});
     `;
-  } else if (['restaurant', 'cafe', 'bar', 'pharmacy', 'clinic', 'school', 'hotel'].includes(type)) {
+  } else if (['restaurant', 'cafe', 'bar', 'pharmacy', 'clinic', 'school', 'hotel', 'language_school'].includes(type)) {
     filter = `nwr["amenity"="${type}"]["name"](${A});`;
   } else if (type === 'gym') {
     filter = `nwr["leisure"="fitness_centre"]["name"](${A});`;

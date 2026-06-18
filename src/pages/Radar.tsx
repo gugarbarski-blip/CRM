@@ -15,7 +15,9 @@ interface Place {
   brand?: string;
   cuisine?: string;
   wheelchair?: string;
+  rating?: string;
   category?: string;
+  source?: 'google' | 'osm';
   lat: number;
   lon: number;
   imported?: boolean;
@@ -36,6 +38,7 @@ const BUSINESS_TYPES = [
   { label: 'Clínicas', value: 'clinic' },
   { label: 'Hotéis', value: 'hotel' },
   { label: 'Escolas', value: 'school' },
+  { label: 'Escolas de idiomas', value: 'language_school' },
 ];
 
 const RADIUS_OPTIONS = [
@@ -103,49 +106,57 @@ export default function Radar() {
     setSearched(false);
 
     try {
-      // 1. Geocode via our own Vercel serverless function (avoids browser rate limits)
+      // 1. Geocode
       const geoRes = await fetch(`/api/geocode?q=${encodeURIComponent(address)}`);
       const geoData = await geoRes.json();
-
       if (!geoRes.ok || !Array.isArray(geoData) || geoData.length === 0) {
         setError('Endereço não encontrado. Inclua cidade e estado, ex: "Av. Dr. Nilo Peçanha, 2469, Porto Alegre, RS".');
         return;
       }
       const { lat, lon } = geoData[0];
+      const qs = `lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`;
 
-      // 2. Search via our own Vercel serverless function (server-to-server, sem timeout de browser)
-      const radarRes = await fetch(
-        `/api/radar?lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`
-      );
-      const ovData = await radarRes.json();
+      // 2. Try Google Places first; fall back to OSM Overpass
+      let elements: Array<{ id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> }> = [];
+      let dataSource: 'google' | 'osm' = 'osm';
 
-      if (!radarRes.ok) {
-        setError(`Erro ao buscar comércios: ${ovData.error ?? radarRes.status}. Tente novamente.`);
-        return;
+      const googleRes = await fetch(`/api/places?${qs}`);
+      if (googleRes.ok) {
+        const gd = await googleRes.json();
+        if (Array.isArray(gd.elements) && gd.elements.length > 0) {
+          elements = gd.elements;
+          dataSource = 'google';
+        }
       }
 
-      // 3. Map to Place objects, deduplicate by name+address
+      if (dataSource === 'osm') {
+        const radarRes = await fetch(`/api/radar?${qs}`);
+        const ovData = await radarRes.json();
+        if (!radarRes.ok) {
+          setError(`Erro ao buscar comércios: ${ovData.error ?? radarRes.status}. Tente novamente.`);
+          return;
+        }
+        elements = ovData.elements ?? [];
+      }
+
+      // 3. Normalise to Place objects
       const seen = new Set<string>();
       const results: Place[] = [];
-      type OverpassEl = {
-        id: number;
-        lat?: number;
-        lon?: number;
-        center?: { lat: number; lon: number };
-        tags?: Record<string, string>;
-      };
-      for (const el of (ovData.elements ?? []) as OverpassEl[]) {
+
+      for (const el of elements) {
         const tags = el.tags ?? {};
         const name = tags.name;
         if (!name) continue;
-        // ways/relations carry coords in `center`, nodes in lat/lon directly
         const elat = el.lat ?? el.center?.lat;
         const elon = el.lon ?? el.center?.lon;
         if (elat == null || elon == null) continue;
-        const addr = buildAddress(tags);
+
+        // Google already provides a full formatted address in addr:full
+        const addr = tags['addr:full'] || buildAddress(tags);
         const key = `${name.toLowerCase()}|${addr}`;
         if (seen.has(key)) continue;
         seen.add(key);
+
         results.push({
           id: String(el.id),
           name,
@@ -159,29 +170,31 @@ export default function Radar() {
           brand: parseTag(tags, 'brand', 'operator'),
           cuisine: parseTag(tags, 'cuisine'),
           wheelchair: parseTag(tags, 'wheelchair'),
-          category: categoryLabel(tags),
+          rating: parseTag(tags, 'rating') || undefined,
+          category: tags['category_label'] || categoryLabel(tags),
+          source: (el.source as 'google') ?? dataSource,
           lat: elat,
           lon: elon,
         });
       }
+
       results.sort((a, b) => a.name.localeCompare(b.name));
       setPlaces(results);
       setSearched(true);
 
-      // 4. Fill in missing addresses via reverse geocoding (throttled to
-      //    respect Nominatim's ~1 req/s; only for the ones lacking addr tags).
-      const missing = results.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
-      for (const p of missing) {
-        try {
-          const r = await fetch(`/api/reverse?lat=${p.lat}&lon=${p.lon}`);
-          if (r.ok) {
-            const { address: addr } = await r.json();
-            if (addr) {
-              setPlaces(prev => prev.map(x => x.id === p.id ? { ...x, address: addr } : x));
+      // 4. For OSM results, fill missing addresses via reverse geocoding
+      if (dataSource === 'osm') {
+        const missing = results.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
+        for (const p of missing) {
+          try {
+            const r = await fetch(`/api/reverse?lat=${p.lat}&lon=${p.lon}`);
+            if (r.ok) {
+              const { address: addr } = await r.json();
+              if (addr) setPlaces(prev => prev.map(x => x.id === p.id ? { ...x, address: addr } : x));
             }
-          }
-        } catch { /* ignore individual failures */ }
-        await new Promise(res => setTimeout(res, 1100));
+          } catch { /* ignore */ }
+          await new Promise(res => setTimeout(res, 1100));
+        }
       }
     } catch (err) {
       setError('Erro inesperado: ' + (err as Error).message);
@@ -199,6 +212,7 @@ export default function Radar() {
         `Endereço: ${place.address}`,
         place.brand && `Marca/Rede: ${place.brand}`,
         place.cuisine && `Cozinha: ${place.cuisine}`,
+        place.rating && `Avaliação: ${place.rating}`,
         place.hours && `Horário: ${place.hours}`,
         place.website && `Site: ${place.website}`,
         place.instagram && `Instagram: ${place.instagram}`,
@@ -326,6 +340,9 @@ export default function Radar() {
               </div>
 
               <div className="space-y-1 mt-1">
+                {place.rating && (
+                  <p className="text-xs text-yellow-600 font-medium">{place.rating}</p>
+                )}
                 <p className="flex items-start gap-1.5 text-xs text-gray-500">
                   <MapPin size={12} className="mt-0.5 flex-shrink-0" />{place.address}
                 </p>
@@ -372,14 +389,19 @@ export default function Radar() {
                 )}
               </div>
 
-              <a
-                href={`https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lon}#map=17/${place.lat}/${place.lon}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 mt-1"
-              >
-                <Building2 size={11} /> Ver no mapa
-              </a>
+              <div className="flex items-center justify-between mt-1">
+                <a
+                  href={`https://www.google.com/maps?q=${place.lat},${place.lon}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+                >
+                  <Building2 size={11} /> Ver no mapa
+                </a>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${place.source === 'google' ? 'bg-green-50 text-green-600' : 'bg-gray-50 text-gray-400'}`}>
+                  {place.source === 'google' ? 'Google' : 'OSM'}
+                </span>
+              </div>
             </div>
           ))}
         </div>
