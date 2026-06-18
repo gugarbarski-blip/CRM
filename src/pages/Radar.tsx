@@ -17,7 +17,7 @@ interface Place {
   wheelchair?: string;
   rating?: string;
   category?: string;
-  source?: 'google' | 'osm';
+  source?: 'foursquare' | 'google' | 'osm';
   lat: number;
   lon: number;
   imported?: boolean;
@@ -116,16 +116,27 @@ export default function Radar() {
       const { lat, lon } = geoData[0];
       const qs = `lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`;
 
-      // 2. Try Google Places first; fall back to OSM Overpass
+      // 2. Try Foursquare first, then Google, then OSM Overpass
       let elements: Array<{ id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> }> = [];
-      let dataSource: 'google' | 'osm' = 'osm';
+      let dataSource: 'foursquare' | 'google' | 'osm' = 'osm';
 
-      const googleRes = await fetch(`/api/places?${qs}`);
-      if (googleRes.ok) {
-        const gd = await googleRes.json();
-        if (Array.isArray(gd.elements) && gd.elements.length > 0) {
-          elements = gd.elements;
-          dataSource = 'google';
+      const fsqRes = await fetch(`/api/places-fsq?${qs}`);
+      if (fsqRes.ok) {
+        const fd = await fsqRes.json();
+        if (Array.isArray(fd.elements) && fd.elements.length > 0) {
+          elements = fd.elements;
+          dataSource = 'foursquare';
+        }
+      }
+
+      if (dataSource === 'osm') {
+        const googleRes = await fetch(`/api/places?${qs}`);
+        if (googleRes.ok) {
+          const gd = await googleRes.json();
+          if (Array.isArray(gd.elements) && gd.elements.length > 0) {
+            elements = gd.elements;
+            dataSource = 'google';
+          }
         }
       }
 
@@ -172,7 +183,7 @@ export default function Radar() {
           wheelchair: parseTag(tags, 'wheelchair'),
           rating: parseTag(tags, 'rating') || undefined,
           category: tags['category_label'] || categoryLabel(tags),
-          source: (el.source as 'google') ?? dataSource,
+          source: (el.source as 'foursquare' | 'google' | 'osm') ?? dataSource,
           lat: elat,
           lon: elon,
         });
@@ -398,8 +409,12 @@ export default function Radar() {
                 >
                   <Building2 size={11} /> Ver no mapa
                 </a>
-                <span className={`text-xs px-1.5 py-0.5 rounded ${place.source === 'google' ? 'bg-green-50 text-green-600' : 'bg-gray-50 text-gray-400'}`}>
-                  {place.source === 'google' ? 'Google' : 'OSM'}
+                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                  place.source === 'foursquare' ? 'bg-purple-50 text-purple-600' :
+                  place.source === 'google' ? 'bg-green-50 text-green-600' :
+                  'bg-gray-50 text-gray-400'
+                }`}>
+                  {place.source === 'foursquare' ? 'Foursquare' : place.source === 'google' ? 'Google' : 'OSM'}
                 </span>
               </div>
             </div>
