@@ -20,6 +20,7 @@ interface Place {
   source?: 'foursquare' | 'google' | 'osm';
   lat: number;
   lon: number;
+  distanceM?: number;
   imported?: boolean;
 }
 
@@ -178,6 +179,7 @@ export default function Radar() {
         if (seen.has(key)) continue;
         seen.add(key);
 
+        const dm = distanceM(parseFloat(lat), parseFloat(lon), elat, elon);
         results.push({
           id: String(el.id),
           name,
@@ -196,13 +198,14 @@ export default function Radar() {
           source: (el.source as 'foursquare' | 'google' | 'osm') ?? dataSource,
           lat: elat,
           lon: elon,
+          distanceM: dm,
         });
       }
 
       // Hard-filter by actual distance — Overpass polygon queries can return
       // features whose boundary clips the radius even if the centre is far away.
-      const filtered = results.filter(p => distanceM(parseFloat(lat), parseFloat(lon), p.lat, p.lon) <= radius);
-      filtered.sort((a, b) => a.name.localeCompare(b.name));
+      const filtered = results.filter(p => (p.distanceM ?? Infinity) <= radius);
+      filtered.sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0));
       setPlaces(filtered);
       setSearched(true);
 
@@ -414,14 +417,23 @@ export default function Radar() {
               </div>
 
               <div className="flex items-center justify-between mt-1">
-                <a
-                  href={`https://www.google.com/maps?q=${place.lat},${place.lon}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
-                >
-                  <Building2 size={11} /> Ver no mapa
-                </a>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`https://www.google.com/maps?q=${place.lat},${place.lon}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    <Building2 size={11} /> Ver no mapa
+                  </a>
+                  {place.distanceM != null && (
+                    <span className="text-xs text-gray-400">
+                      {place.distanceM < 1000
+                        ? `${Math.round(place.distanceM)} m`
+                        : `${(place.distanceM / 1000).toFixed(1)} km`}
+                    </span>
+                  )}
+                </div>
                 <span className={`text-xs px-1.5 py-0.5 rounded ${
                   place.source === 'foursquare' ? 'bg-purple-50 text-purple-600' :
                   place.source === 'google' ? 'bg-green-50 text-green-600' :
