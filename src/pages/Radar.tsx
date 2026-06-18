@@ -127,38 +127,42 @@ export default function Radar() {
       const { lat, lon } = geoData[0];
       const qs = `lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`;
 
-      // 2. Try Foursquare first, then Google, then OSM Overpass
-      let elements: Array<{ id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> }> = [];
-      let dataSource: 'foursquare' | 'google' | 'osm' = 'osm';
+      // 2. Foursquare + OSM em paralelo; Google como fallback se ambos falharem
+      type RawEl = { id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> };
+      let elements: RawEl[] = [];
+      let hasOsm = false;
 
-      const fsqRes = await fetch(`/api/places-fsq?${qs}`);
-      if (fsqRes.ok) {
+      const [fsqRes, radarRes] = await Promise.all([
+        fetch(`/api/places-fsq?${qs}`).catch(() => null),
+        fetch(`/api/radar?${qs}`).catch(() => null),
+      ]);
+
+      const fsqElements: RawEl[] = [];
+      if (fsqRes?.ok) {
         const fd = await fsqRes.json();
-        if (Array.isArray(fd.elements) && fd.elements.length > 0) {
-          elements = fd.elements;
-          dataSource = 'foursquare';
-        }
+        if (Array.isArray(fd.elements)) fsqElements.push(...fd.elements);
       }
 
-      if (dataSource === 'osm') {
-        const googleRes = await fetch(`/api/places?${qs}`);
-        if (googleRes.ok) {
+      const osmElements: RawEl[] = [];
+      if (radarRes?.ok) {
+        const od = await radarRes.json();
+        if (Array.isArray(od.elements)) { osmElements.push(...od.elements); hasOsm = true; }
+      }
+
+      // Foursquare primeiro, depois OSM (sem duplicar pelo nome)
+      elements = [...fsqElements, ...osmElements];
+
+      // Se ambos falharam, tenta Google Places
+      if (elements.length === 0) {
+        const googleRes = await fetch(`/api/places?${qs}`).catch(() => null);
+        if (googleRes?.ok) {
           const gd = await googleRes.json();
-          if (Array.isArray(gd.elements) && gd.elements.length > 0) {
-            elements = gd.elements;
-            dataSource = 'google';
-          }
+          if (Array.isArray(gd.elements)) elements = gd.elements;
         }
-      }
-
-      if (dataSource === 'osm') {
-        const radarRes = await fetch(`/api/radar?${qs}`);
-        const ovData = await radarRes.json();
-        if (!radarRes.ok) {
-          setError(`Erro ao buscar comércios: ${ovData.error ?? radarRes.status}. Tente novamente.`);
+        if (elements.length === 0) {
+          setError('Nenhuma fonte retornou dados. Tente novamente.');
           return;
         }
-        elements = ovData.elements ?? [];
       }
 
       // 3. Normalise to Place objects
@@ -210,7 +214,7 @@ export default function Radar() {
       setSearched(true);
 
       // 4. For OSM results, fill missing addresses via reverse geocoding
-      if (dataSource === 'osm') {
+      if (hasOsm) {
         const missing = filtered.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
         for (const p of missing) {
           try {
