@@ -56,6 +56,16 @@ function parseTag(tags: Record<string, string>, ...keys: string[]): string | und
   }
 }
 
+// Haversine distance in metres between two lat/lon points
+function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // Normalize a social handle/url into a clickable profile URL
 function socialUrl(raw: string | undefined, base: string): string | undefined {
   if (!raw) return undefined;
@@ -189,13 +199,16 @@ export default function Radar() {
         });
       }
 
-      results.sort((a, b) => a.name.localeCompare(b.name));
-      setPlaces(results);
+      // Hard-filter by actual distance — Overpass polygon queries can return
+      // features whose boundary clips the radius even if the centre is far away.
+      const filtered = results.filter(p => distanceM(parseFloat(lat), parseFloat(lon), p.lat, p.lon) <= radius);
+      filtered.sort((a, b) => a.name.localeCompare(b.name));
+      setPlaces(filtered);
       setSearched(true);
 
       // 4. For OSM results, fill missing addresses via reverse geocoding
       if (dataSource === 'osm') {
-        const missing = results.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
+        const missing = filtered.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
         for (const p of missing) {
           try {
             const r = await fetch(`/api/reverse?lat=${p.lat}&lon=${p.lon}`);
