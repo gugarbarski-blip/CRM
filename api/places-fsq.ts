@@ -79,10 +79,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const apiKey = process.env.FSQ_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'FSQ_API_KEY not configured' });
 
-  const { lat, lon, radius, type } = req.query;
+  const { lat, lon, radius, type, debug } = req.query;
   if (!lat || !lon || !radius) return res.status(400).json({ error: 'Missing lat, lon or radius' });
 
   const categoryId = FSQ_CATEGORY_MAP[(type as string) ?? ''];
+
+  // Debug mode: probe both platforms and return the raw upstream responses,
+  // so we can see exactly what Foursquare rejects. Open /api/places-fsq?...&debug=1
+  if (debug) {
+    const out: Record<string, unknown> = { keyLen: apiKey.length };
+    try {
+      const r = await fetch(
+        `https://places-api.foursquare.com/places/search?ll=${lat},${lon}&radius=${radius}&limit=3`,
+        { headers: { Authorization: `Bearer ${apiKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }
+      );
+      out.newApi = { status: r.status, body: (await r.text()).slice(0, 800) };
+    } catch (e) { out.newApi = { threw: (e as Error).message }; }
+    try {
+      const r = await fetch(
+        `https://api.foursquare.com/v3/places/search?ll=${lat},${lon}&radius=${radius}&limit=3`,
+        { headers: { Authorization: apiKey, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }
+      );
+      out.legacyApi = { status: r.status, body: (await r.text()).slice(0, 800) };
+    } catch (e) { out.legacyApi = { threw: (e as Error).message }; }
+    return res.status(200).json(out);
+  }
 
   // --- Attempt 1: NEW platform ---
   try {
