@@ -21,16 +21,16 @@ function buildQuery(lat: number, lon: number, radius: number, type: string): str
 
   // nwr = node + way + relation, catches businesses mapped as areas too.
   if (type === '') {
-    // Broad "all" sweep: any named entity that is a shop, amenity, office,
-    // tourism spot, leisure facility, or craft. This catches language schools
-    // (amenity=language_school), offices, clinics, etc. that the old enum missed.
+    // Broad commercial sweep — includes all shop types, a wide amenity allowlist
+    // (excludes non-commercial: parking, toilets, benches, parks, etc.),
+    // offices, crafts, tourism accommodation, and leisure fitness.
     filter = `
       nwr["shop"]["name"](${A});
-      nwr["amenity"]["name"](${A});
-      nwr["tourism"]["name"](${A});
-      nwr["leisure"]["name"](${A});
       nwr["office"]["name"](${A});
       nwr["craft"]["name"](${A});
+      nwr["amenity"~"^(restaurant|cafe|bar|fast_food|pub|food_court|ice_cream|biergarten|pharmacy|clinic|doctors|dentist|veterinary|hospital|physiotherapist|optician|bank|bureau_de_change|money_transfer|atm|fuel|car_wash|car_repair|driving_school|language_school|music_school|school|kindergarten|college|university|marketplace|laundry|dry_cleaning|post_office|nightclub|cinema|theatre|arts_centre|studio|spa|massage|tattoo|nail_salon|hairdresser|beauty|travel_agency|insurance|car_rental|bicycle_rental|photo|florist|funeral_home)$"]["name"](${A});
+      nwr["tourism"~"^(hotel|guest_house|hostel|motel|apartment|chalet)$"]["name"](${A});
+      nwr["leisure"~"^(fitness_centre|sports_centre|swimming_pool|dance|yoga|martial_arts)$"]["name"](${A});
     `;
   } else if (['restaurant', 'cafe', 'bar', 'pharmacy', 'clinic', 'school', 'hotel', 'language_school'].includes(type)) {
     filter = `nwr["amenity"="${type}"]["name"](${A});`;
