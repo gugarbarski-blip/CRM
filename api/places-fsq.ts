@@ -121,14 +121,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  // ── ATTEMPT A: NEW platform, Bearer ──────────────────────────────────────
+  // ── ATTEMPT A: NEW platform, Bearer (only variant that works) ────────────
+  // Do NOT send a `fields` param — it causes the new API to hang/timeout.
+  // The default response includes name, lat, lon, location, categories.
   try {
-    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50', fields: NEW_FIELDS });
+    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50' });
     if (categoryId) params.set('fsq_category_ids', categoryId);
 
     const r = await fetch(`https://places-api.foursquare.com/places/search?${params}`, {
       headers: { Authorization: `Bearer ${apiKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(12000),
     });
     if (r.ok) {
       const data = await r.json();
@@ -139,45 +141,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   } catch (e) { console.error(`[FSQ-A] threw: ${(e as Error).message}`); }
 
-  // ── ATTEMPT B: LEGACY v3, Bearer ─────────────────────────────────────────
-  try {
-    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50', fields: LEGACY_FIELDS });
-    if (categoryId) params.set('categories', categoryId);
-
-    const r = await fetch(`https://api.foursquare.com/v3/places/search?${params}`, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      const elements = normalise(data.results ?? []);
-      if (elements.length > 0) return res.status(200).json({ elements, source: 'foursquare' });
-    } else {
-      console.error(`[FSQ-B] HTTP ${r.status}: ${await r.text()}`);
-    }
-  } catch (e) { console.error(`[FSQ-B] threw: ${(e as Error).message}`); }
-
-  // ── ATTEMPT C: LEGACY v3, raw key ────────────────────────────────────────
-  try {
-    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50', fields: LEGACY_FIELDS });
-    if (categoryId) params.set('categories', categoryId);
-
-    const r = await fetch(`https://api.foursquare.com/v3/places/search?${params}`, {
-      headers: { Authorization: apiKey, Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      const elements = normalise(data.results ?? []);
-      if (elements.length > 0) return res.status(200).json({ elements, source: 'foursquare' });
-    } else {
-      const err = await r.text();
-      console.error(`[FSQ-C] HTTP ${r.status}: ${err}`);
-      return res.status(r.status).json({ error: `Foursquare: ${err}` });
-    }
-  } catch (err) {
-    return res.status(503).json({ error: (err as Error).message });
-  }
-
-  return res.status(503).json({ error: 'All Foursquare attempts failed' });
+  return res.status(503).json({ error: 'Foursquare unavailable' });
 }
