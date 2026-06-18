@@ -25,7 +25,9 @@ const FSQ_CATEGORY_MAP: Record<string, string> = {
   gift_shop: '17050',
 };
 
-const FIELDS = 'fsq_place_id,name,latitude,longitude,location,tel,website,hours,categories,rating,stats,social_media';
+// New platform field names (2025+). Omit stats/social_media which are legacy-only.
+const NEW_FIELDS = 'fsq_place_id,name,latitude,longitude,location,tel,website,hours,categories,rating';
+// Legacy v3 field names
 const LEGACY_FIELDS = 'fsq_id,name,geocodes,location,tel,website,hours,categories,rating,stats,social_media';
 
 interface RawPlace {
@@ -121,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // ── ATTEMPT A: NEW platform, Bearer ──────────────────────────────────────
   try {
-    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50', fields: FIELDS });
+    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50', fields: NEW_FIELDS });
     if (categoryId) params.set('fsq_category_ids', categoryId);
 
     const r = await fetch(`https://places-api.foursquare.com/places/search?${params}`, {
