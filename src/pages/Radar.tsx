@@ -20,6 +20,7 @@ interface Place {
   source?: 'foursquare' | 'google' | 'osm';
   lat: number;
   lon: number;
+  distanceM?: number;
   imported?: boolean;
 }
 
@@ -126,38 +127,42 @@ export default function Radar() {
       const { lat, lon } = geoData[0];
       const qs = `lat=${lat}&lon=${lon}&radius=${radius}&type=${encodeURIComponent(type)}`;
 
-      // 2. Try Foursquare first, then Google, then OSM Overpass
-      let elements: Array<{ id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> }> = [];
-      let dataSource: 'foursquare' | 'google' | 'osm' = 'osm';
+      // 2. Foursquare + OSM em paralelo; Google como fallback se ambos falharem
+      type RawEl = { id: number | string; lat?: number; lon?: number; center?: { lat: number; lon: number }; source?: string; tags?: Record<string, string> };
+      let elements: RawEl[] = [];
+      let hasOsm = false;
 
-      const fsqRes = await fetch(`/api/places-fsq?${qs}`);
-      if (fsqRes.ok) {
+      const [fsqRes, radarRes] = await Promise.all([
+        fetch(`/api/places-fsq?${qs}`).catch(() => null),
+        fetch(`/api/radar?${qs}`).catch(() => null),
+      ]);
+
+      const fsqElements: RawEl[] = [];
+      if (fsqRes?.ok) {
         const fd = await fsqRes.json();
-        if (Array.isArray(fd.elements) && fd.elements.length > 0) {
-          elements = fd.elements;
-          dataSource = 'foursquare';
-        }
+        if (Array.isArray(fd.elements)) fsqElements.push(...fd.elements);
       }
 
-      if (dataSource === 'osm') {
-        const googleRes = await fetch(`/api/places?${qs}`);
-        if (googleRes.ok) {
+      const osmElements: RawEl[] = [];
+      if (radarRes?.ok) {
+        const od = await radarRes.json();
+        if (Array.isArray(od.elements)) { osmElements.push(...od.elements); hasOsm = true; }
+      }
+
+      // Foursquare primeiro, depois OSM (sem duplicar pelo nome)
+      elements = [...fsqElements, ...osmElements];
+
+      // Se ambos falharam, tenta Google Places
+      if (elements.length === 0) {
+        const googleRes = await fetch(`/api/places?${qs}`).catch(() => null);
+        if (googleRes?.ok) {
           const gd = await googleRes.json();
-          if (Array.isArray(gd.elements) && gd.elements.length > 0) {
-            elements = gd.elements;
-            dataSource = 'google';
-          }
+          if (Array.isArray(gd.elements)) elements = gd.elements;
         }
-      }
-
-      if (dataSource === 'osm') {
-        const radarRes = await fetch(`/api/radar?${qs}`);
-        const ovData = await radarRes.json();
-        if (!radarRes.ok) {
-          setError(`Erro ao buscar comércios: ${ovData.error ?? radarRes.status}. Tente novamente.`);
+        if (elements.length === 0) {
+          setError('Nenhuma fonte retornou dados. Tente novamente.');
           return;
         }
-        elements = ovData.elements ?? [];
       }
 
       // 3. Normalise to Place objects
@@ -178,6 +183,7 @@ export default function Radar() {
         if (seen.has(key)) continue;
         seen.add(key);
 
+        const dm = distanceM(parseFloat(lat), parseFloat(lon), elat, elon);
         results.push({
           id: String(el.id),
           name,
@@ -196,18 +202,19 @@ export default function Radar() {
           source: (el.source as 'foursquare' | 'google' | 'osm') ?? dataSource,
           lat: elat,
           lon: elon,
+          distanceM: dm,
         });
       }
 
       // Hard-filter by actual distance — Overpass polygon queries can return
       // features whose boundary clips the radius even if the centre is far away.
-      const filtered = results.filter(p => distanceM(parseFloat(lat), parseFloat(lon), p.lat, p.lon) <= radius);
-      filtered.sort((a, b) => a.name.localeCompare(b.name));
+      const filtered = results.filter(p => (p.distanceM ?? Infinity) <= radius);
+      filtered.sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0));
       setPlaces(filtered);
       setSearched(true);
 
       // 4. For OSM results, fill missing addresses via reverse geocoding
-      if (dataSource === 'osm') {
+      if (hasOsm) {
         const missing = filtered.filter(p => p.address === 'Endereço não disponível').slice(0, 12);
         for (const p of missing) {
           try {
@@ -414,14 +421,23 @@ export default function Radar() {
               </div>
 
               <div className="flex items-center justify-between mt-1">
-                <a
-                  href={`https://www.google.com/maps?q=${place.lat},${place.lon}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
-                >
-                  <Building2 size={11} /> Ver no mapa
-                </a>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`https://www.google.com/maps?q=${place.lat},${place.lon}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    <Building2 size={11} /> Ver no mapa
+                  </a>
+                  {place.distanceM != null && (
+                    <span className="text-xs text-gray-400">
+                      {place.distanceM < 1000
+                        ? `${Math.round(place.distanceM)} m`
+                        : `${(place.distanceM / 1000).toFixed(1)} km`}
+                    </span>
+                  )}
+                </div>
                 <span className={`text-xs px-1.5 py-0.5 rounded ${
                   place.source === 'foursquare' ? 'bg-purple-50 text-purple-600' :
                   place.source === 'google' ? 'bg-green-50 text-green-600' :

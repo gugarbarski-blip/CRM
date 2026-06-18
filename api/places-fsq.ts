@@ -2,10 +2,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export const maxDuration = 30;
 
-// Foursquare Places API. Two platforms exist:
-//  - NEW (2025+): places-api.foursquare.com, "Bearer" service key, version header
-//  - LEGACY v3:   api.foursquare.com/v3, raw key in Authorization
-// We try NEW first, fall back to LEGACY, so any key type works.
+// Foursquare Places API.
+// Three variants tried in order:
+//  A) NEW platform (2025+): places-api.foursquare.com  + Bearer + version header
+//  B) LEGACY v3 bearer:     api.foursquare.com/v3      + Bearer (some docs show this)
+//  C) LEGACY v3 raw:        api.foursquare.com/v3      + raw key (classic format)
 
 const FSQ_CATEGORY_MAP: Record<string, string> = {
   restaurant: '13065',
@@ -24,7 +25,9 @@ const FSQ_CATEGORY_MAP: Record<string, string> = {
   gift_shop: '17050',
 };
 
-const FIELDS = 'fsq_place_id,name,latitude,longitude,location,tel,website,hours,categories,rating,stats,social_media';
+// New platform field names (2025+). Omit stats/social_media which are legacy-only.
+const NEW_FIELDS = 'fsq_place_id,name,latitude,longitude,location,tel,website,hours,categories,rating';
+// Legacy v3 field names
 const LEGACY_FIELDS = 'fsq_id,name,geocodes,location,tel,website,hours,categories,rating,stats,social_media';
 
 interface RawPlace {
@@ -73,6 +76,17 @@ function normalise(places: RawPlace[]) {
     .filter(Boolean);
 }
 
+// Probe one URL+headers combo, return { status, ok, body_snippet }
+async function probe(url: string, headers: Record<string, string>): Promise<{ status: number; ok: boolean; body: string }> {
+  try {
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+    const body = (await r.text()).slice(0, 600);
+    return { status: r.status, ok: r.ok, body };
+  } catch (e) {
+    return { status: 0, ok: false, body: (e as Error).message };
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -83,77 +97,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!lat || !lon || !radius) return res.status(400).json({ error: 'Missing lat, lon or radius' });
 
   const categoryId = FSQ_CATEGORY_MAP[(type as string) ?? ''];
+  const ll = `${lat},${lon}`;
 
-  // Debug mode: probe both platforms and return the raw upstream responses,
-  // so we can see exactly what Foursquare rejects. Open /api/places-fsq?...&debug=1
+  // ── DEBUG MODE ────────────────────────────────────────────────────────────
+  // Open /api/places-fsq?lat=...&lon=...&radius=...&debug=1 in browser
+  // to see raw Foursquare responses for each auth variant.
   if (debug) {
-    const out: Record<string, unknown> = { keyLen: apiKey.length };
-    try {
-      const r = await fetch(
-        `https://places-api.foursquare.com/places/search?ll=${lat},${lon}&radius=${radius}&limit=3`,
-        { headers: { Authorization: `Bearer ${apiKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }
-      );
-      out.newApi = { status: r.status, body: (await r.text()).slice(0, 800) };
-    } catch (e) { out.newApi = { threw: (e as Error).message }; }
-    try {
-      const r = await fetch(
-        `https://api.foursquare.com/v3/places/search?ll=${lat},${lon}&radius=${radius}&limit=3`,
-        { headers: { Authorization: apiKey, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }
-      );
-      out.legacyApi = { status: r.status, body: (await r.text()).slice(0, 800) };
-    } catch (e) { out.legacyApi = { threw: (e as Error).message }; }
-    return res.status(200).json(out);
+    const base3 = `https://api.foursquare.com/v3/places/search?ll=${ll}&radius=${radius}&limit=3`;
+    const baseNew = `https://places-api.foursquare.com/places/search?ll=${ll}&radius=${radius}&limit=3`;
+    const [a, b, c, d] = await Promise.all([
+      probe(baseNew,  { Authorization: `Bearer ${apiKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' }),
+      probe(baseNew,  { Authorization: apiKey, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' }),
+      probe(base3,    { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }),
+      probe(base3,    { Authorization: apiKey, Accept: 'application/json' }),
+    ]);
+    return res.status(200).json({
+      keyLen: apiKey.length,
+      keyPrefix: apiKey.slice(0, 6),
+      'A_newPlatform_Bearer': a,
+      'B_newPlatform_rawKey': b,
+      'C_legacyV3_Bearer': c,
+      'D_legacyV3_rawKey': d,
+    });
   }
 
-  // --- Attempt 1: NEW platform ---
+  // ── ATTEMPT A: NEW platform, Bearer (only variant that works) ────────────
+  // Do NOT send a `fields` param — it causes the new API to hang/timeout.
+  // The default response includes name, lat, lon, location, categories.
   try {
-    const params = new URLSearchParams({
-      ll: `${lat},${lon}`,
-      radius: radius as string,
-      limit: '50',
-      fields: FIELDS,
-    });
+    const params = new URLSearchParams({ ll, radius: radius as string, limit: '50' });
     if (categoryId) params.set('fsq_category_ids', categoryId);
 
     const r = await fetch(`https://places-api.foursquare.com/places/search?${params}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'X-Places-Api-Version': '2025-06-17',
-        Accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(10000),
+      headers: { Authorization: `Bearer ${apiKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' },
+      signal: AbortSignal.timeout(12000),
     });
-
     if (r.ok) {
       const data = await r.json();
-      return res.status(200).json({ elements: normalise(data.results ?? []), source: 'foursquare' });
+      const elements = normalise(data.results ?? []);
+      if (elements.length > 0) return res.status(200).json({ elements, source: 'foursquare' });
+    } else {
+      console.error(`[FSQ-A] HTTP ${r.status}: ${await r.text()}`);
     }
-    console.error(`[FSQ] new API failed: HTTP ${r.status} ${await r.text()}`);
-    // 401/403 => probably a legacy key; fall through. Other errors: keep going too.
-  } catch (e) { console.error(`[FSQ] new API threw: ${(e as Error).message}`); }
+  } catch (e) { console.error(`[FSQ-A] threw: ${(e as Error).message}`); }
 
-  // --- Attempt 2: LEGACY v3 platform ---
-  try {
-    const params = new URLSearchParams({
-      ll: `${lat},${lon}`,
-      radius: radius as string,
-      limit: '50',
-      fields: LEGACY_FIELDS,
-    });
-    if (categoryId) params.set('categories', categoryId);
-
-    const r = await fetch(`https://api.foursquare.com/v3/places/search?${params}`, {
-      headers: { Authorization: apiKey, Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!r.ok) {
-      const err = await r.text();
-      return res.status(r.status).json({ error: `Foursquare: ${err}` });
-    }
-    const data = await r.json();
-    return res.status(200).json({ elements: normalise(data.results ?? []), source: 'foursquare' });
-  } catch (err) {
-    return res.status(503).json({ error: (err as Error).message });
-  }
+  return res.status(503).json({ error: 'Foursquare unavailable' });
 }
